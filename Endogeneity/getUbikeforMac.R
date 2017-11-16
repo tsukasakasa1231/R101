@@ -5,7 +5,8 @@ options(stringsAsFactors = FALSE)
 # 1. Get and convert to an R object ---------------------------------------
 Date <- Sys.time()
 while(TRUE)
-{
+{ 
+  # 透過調整if條件來修改頻率
   if(as.numeric(format(Sys.time(), "%M"))!=as.numeric(format(Date, "%M"))&as.numeric(format(Sys.time(), "%M"))%%5==0)
   {
     Date <- Sys.time()
