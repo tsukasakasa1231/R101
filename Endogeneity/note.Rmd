@@ -1,0 +1,581 @@
+---
+title: "Youbike研究:內生性經濟分析報告"
+output: 
+  html_notebook:
+    toc: true
+    toc_float: true
+---
+#Research Purpose
+我們計畫透過Youbike的使用資料，來研究這樣的喝咖啡政策是不是真的有顯著效果，以及分析台北市各個區域間單車騎乘率，研究咖啡站的選址是否合乎效率。
+
+政策背景：
+北市府為提倡節能減炭，訂定每周五為綠色運輸日，只要周五騎自行車通勤上班就請你喝咖啡，```每周五上午7時30分至9時30分```擺設攤位由原六個增加為12個，供騎單車市民領取咖啡點心，共同響應周五綠色運輸日，我們希望檢視此活動是否真的能使綠色運輸日當天使用自行車通勤數量增加。
+
+
+Note:這份notebook主要先透過探索政府即時公開資料，試圖觀察Youbike使用變化，所以尚未涉及回歸模型。
+
+
+
+
+#Using Library
+```{r message=FALSE}
+library(jsonlite)
+library(httr)
+library(gplots)
+require(ggplot2)
+library(readr)
+library(plm)
+library(stringr)
+library(readr)
+library(data.table)
+
+```
+# Data:Ubike
+##Import data
+```{r results = "hide"}
+RAW <- read_csv("~/Google Drive/Course/Working_on/內生性報告/ubike/ubikedf2.csv")
+ubike.df <- RAW
+ubike.df$"X1"<-NULL
+```
+##Cleaning data
+
+###重新命名
+```{r message=FALSE}
+url <- "http://data.taipei/youbike"
+ubike.list <- fromJSON(content(GET(url),"text"))
+cname <- names(ubike.list$retVal$`0001`)
+names(ubike.df) <- c(cname,"Time")
+```
+###Drop NA
+```{r}
+ubike.df<-ubike.df[!is.na(ubike.df$sbi),]
+```
+
+###Add time
+```{r message=FALSE,results = "hide"}
+ubike.df["sat"]<-ubike.df$sbi/ubike.df$tot
+ubike.df$"sno"<-as.factor(ubike.df$"sno")
+ubike.df$Time<-as.POSIXct(ubike.df$Time)
+ubike.df["hour"]<-format(ubike.df$Time,"%H")
+ubike.df["date"]<-format(ubike.df$Time,"%d")
+ubike.df["min"]<-format(ubike.df$Time,"%M")
+Sys.setlocale("LC_TIME", "en_US")
+ubike.df["dow"]<-weekdays(ubike.df$Time)
+ubike.df$hour<-as.numeric(ubike.df$hour)
+ubike.df$date<-as.numeric(ubike.df$date)
+```
+
+###Add position
+```{r}
+ubike.df["position"]<-paste (ubike.df$lat,ubike.df$lng,sep = ",", collapse = NULL)
+```
+
+###咖啡站點
+```{r message=FALSE}
+coffeStand<-sort(c(173,175,8,45,87,22,115,57,134,238,172,187))
+ubike.df$"coffee"=ifelse(ubike.df$sno %in% coffeStand,1,0)
+```
+
+###氣象測站配對
+```{r}
+ubike.df["station"]<-"tpe"
+ubike.df$"station"[ubike.df$sareaen=="Xinyi Dist."]<-"xyi"
+ubike.df$"station"[ubike.df$sareaen=="Nangang Dist."]<-"nag"
+ubike.df$"station"[ubike.df$sareaen=="Zhongzheng Dist."]<-"tpe"
+ubike.df$"station"[ubike.df$sareaen=="Wanhua Dist."]<-"tpe"
+ubike.df$"station"[ubike.df$sareaen=="Wenshan Dist."]<-"wen"
+ubike.df$"station"[ubike.df$sareaen=="Daan Dist."]<-"xyi"
+ubike.df$"station"[ubike.df$sareaen=="Shilin Dist."]<-"tia"
+ubike.df$"station"[ubike.df$sareaen=="Beitou Dist."]<-"tia"
+ubike.df$"station"[ubike.df$sareaen=="Songshan Dist."]<-"ssh"
+```
+
+
+```{r}
+ubike.df
+```
+
+##Check plot
+###using plotmean
+```{r warning=FALSE}
+plotmeans(sat ~ sareaen, main="Heterogeineity across area", data=ubike.df)
+plotmeans(sat ~ sno, main="Heterogeineity across sno", data=ubike.df)
+```
+###Drop out row value==0
+```{r warning=FALSE}
+#drop 6,82,139,252
+ubike.df<-ubike.df[!ubike.df$sno %in% c(6,82,139,252),]
+```
+
+### review plotmeans
+```{r warning=FALSE}
+plotmeans(sat ~ sno, main="Heterogeineity across no.", data=ubike.df)
+plotmeans(sat ~ sareaen, main="Heterogeineity across area", data=ubike.df)
+plotmeans(sat ~ dow, main="Heterogeineity across day of week", data=ubike.df)
+```
+
+
+##Check specific bike station
+### station no.1
+```{r}
+sta1<-ubike.df[ubike.df$sno==1,]
+plot(sta1$Time,sta1$sat)
+```
+
+#### highlight Friday
+```{r echo=FALSE}
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-15 GMT")
+enddate<-as.POSIXct("2017-11-28 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, sat,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+p
+```
+#### highlight morning
+```{r echo=FALSE}
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+
+p
+```
+###station no.1:A closer look
+#### highlight Friday
+```{r echo=FALSE}
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, sat,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+p
+```
+
+#### highlight morning
+```{r echo=FALSE}
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+
+p
+```
+
+### station no.22
+```{r}
+sta1<-ubike.df[ubike.df$sno==22,]
+plot(sta1$Time,sta1$sat)
+```
+```{r echo=FALSE}
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, sat,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+p
+```
+```{r echo=FALSE}
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+
+p
+```
+# Data:Weather
+##讀入天氣資訊
+```{r results=FALSE}
+station<-c("taipei","tianmu","neihu","xinyi","songshan","gongguan","dazhi","wenshan","nangang")
+k=0
+for(i in 1:length(station))
+{
+  wheaWD<-"/Users/maxchen/Google Drive/Course/Working_on/內生性報告/weather/"
+  wheaWD<-paste(wheaWD,station[i],sep = "", collapse = NULL)
+  setwd(wheaWD)
+  files = list.files(pattern="*.csv")
+  temp = do.call(rbind, lapply(files,function(x){
+    read.csv(x,fileEncoding = "UTF-8", stringsAsFactors = FALSE)
+  }))
+  if(k==0)
+  {
+    weather<-temp
+    k=1
+  }
+  else
+  {
+    weather<-rbind(weather,temp)
+  }
+}
+```
+###重新命名
+```{r}
+colnames(weather) <-c("Obstime","StnPre","SeaPre","temp_hour","Tddewpoint","humidity","wind_speed", "wind_degree","WSGust","WDGust", "precp","precpHour","sunshine","Globrad","visb","year","month","day","hour","Time","station")
+
+```
+
+```{r results = "hide"}
+weather$X<-NULL
+weather$temp_hour<-as.numeric(weather$temp_hour)
+weather$humidity<-as.numeric(weather$humidity)
+weather$wind_speed<-as.numeric(weather$wind_speed)
+weather$precp<-as.numeric(weather$precp)
+```
+###合併天氣資料
+```{r}
+colnames(ubike.df)[18] <- "day"
+total <- merge(ubike.df,weather, by = c("day","hour","station") , all.x=TRUE )
+```
+
+###標示下雨
+```{r}
+total["rain"]<-0
+total$rain[total$precp>0]<-1
+colnames(total)[18] <- "Time"
+```
+```{r}
+total
+```
+```{r}
+sta1<-total[total$sno==22,]
+```
+###加入下雨區間
+```{r echo=FALSE}
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, sat,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+#####
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+#####
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$rain)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="red", alpha=0.3)  
+p
+```
+
+#Difference
+## Check station no.1
+```{r}
+sta1<-total[total$sno==1,]
+```
+### Sort by time
+```{r}
+sta1<-sta1[order(sta1$Time , decreasing = FALSE ),]
+```
+### Calculate difference
+```{r}
+sta1$"diff"<-0
+for(i in 2:nrow(sta1))
+{
+  sta1$diff[i]<-abs(sta1$sbi[i]-sta1$sbi[i-1])
+}
+```
+### Check plot
+```{r echo=FALSE}
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, diff,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+#####
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+#####
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$rain)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="red", alpha=0.3)  
+p
+```
+## Check station no.22
+```{r echo=FALSE}
+sta1<-total[total$sno==22,]
+
+sta1<-sta1[order(sta1$Time , decreasing = FALSE ),]
+
+sta1$"diff"<-0
+for(i in 2:nrow(sta1))
+{
+  sta1$diff[i]<-abs(sta1$sbi[i]-sta1$sbi[i-1])
+}
+
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, diff,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+#####
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+#####
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$rain)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="red", alpha=0.3)  
+p
+```
+## Check station no.87 大安
+```{r echo=FALSE}
+sta1<-total[total$sno==87,]
+
+sta1<-sta1[order(sta1$Time , decreasing = FALSE ),]
+
+sta1$"diff"<-0
+for(i in 2:nrow(sta1))
+{
+  sta1$diff[i]<-abs(sta1$sbi[i]-sta1$sbi[i-1])
+}
+
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, diff,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+#####
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+#####
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$rain)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="red", alpha=0.3)  
+p
+```
+## Check station no.45 公館
+```{r echo=FALSE}
+sta1<-total[total$sno==45,]
+
+sta1<-sta1[order(sta1$Time , decreasing = FALSE ),]
+
+sta1$"diff"<-0
+for(i in 2:nrow(sta1))
+{
+  sta1$diff[i]<-abs(sta1$sbi[i]-sta1$sbi[i-1])
+}
+
+sta1$"fri"= ifelse(sta1$dow=="Friday",1,0)
+
+startdate<-as.POSIXct("2017-11-22 GMT")
+enddate<-as.POSIXct("2017-11-25 GMT")
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+
+inds <- diff(na.omit(c(0, check$fri)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-ggplot(data=check, aes(Time, diff,xmin=startdate, xmax=enddate), na.rm = TRUE) +
+  theme_minimal() +
+  geom_line(lty=2, color="steelblue", lwd=1) +
+  geom_point(na.rm = TRUE,size = 1) +
+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="green", alpha=0.3)
+#####
+sta1$"Mor"= ifelse(sta1$hour %in% c(7,8,9,10),1,0)
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$Mor)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="orange", alpha=0.3)  
+#####
+check<-sta1[sta1$Time %between% c(startdate, enddate),]
+inds <- diff(na.omit(c(0, check$rain)))
+start <- check$Time[inds == 1]
+end <- check$Time[inds == -1]
+if (length(start) > length(end)) 
+{
+  end <- c(end, tail(check$Time, 1))
+}
+rects <- data.frame(start=as.POSIXct(start), end=as.POSIXct(end), group=seq_along(start))
+p<-p+  geom_rect(data=rects, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=-Inf,ymax=Inf, group=group), color="transparent", fill="red", alpha=0.3)  
+p
+```
